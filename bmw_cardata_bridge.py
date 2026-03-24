@@ -68,10 +68,13 @@ def pkce():
     return v, c
 
 # ─── TOKEN ────────────────────────────────────────────────────
-def save_tokens(t):
+def save_tokens(t, container_id=None):
+    # Bestehende Token-Datei laden um container_id nicht zu überschreiben
+    existing = load_tokens() or {}
     d = {"access_token": t["access_token"], "refresh_token": t["refresh_token"],
          "id_token": t.get("id_token"),
-         "expires_at": time.time() + t.get("expires_in", 3600) - 60}
+         "expires_at": time.time() + t.get("expires_in", 3600) - 60,
+         "container_id": container_id or existing.get("container_id")}
     with open(CONFIG["token_file"], "w") as f:
         json.dump(d, f, indent=2)
     os.chmod(CONFIG["token_file"], 0o600)
@@ -168,15 +171,27 @@ def fetch_data(token):
     vin = CONFIG["vin"]
     cid = CONFIG["container_id"]
 
-    # Container-ID auto-ermitteln falls leer
+    # Container-ID: erst aus Token-Datei, dann via API (einmalig)
     if not cid:
+        tokens = load_tokens()
+        cid = tokens.get("container_id") if tokens else None
+
+    if not cid:
+        log.info("Container-ID wird einmalig via API ermittelt und gespeichert...")
         raw = http_get(f"{BMW_API}/customers/containers", token)
         cs  = raw if isinstance(raw, list) else raw.get("containers", [])
         act = [c for c in cs if c.get("state") == "ACTIVE"]
         if not act:
             raise RuntimeError("Keine aktiven Container!")
         cid = act[0].get("containerId") or act[0].get("id")
-        log.info("Auto-Container: %s", cid)
+        # Container-ID in Token-Datei speichern → kein extra Call mehr nötig
+        tokens = load_tokens() or {}
+        tokens["container_id"] = cid
+        with open(CONFIG["token_file"], "w") as f:
+            json.dump(tokens, f, indent=2)
+        log.info("Container-ID gespeichert: %s", cid)
+    else:
+        log.debug("Container-ID aus Datei: %s", cid)
 
     url = f"{BMW_API}/customers/vehicles/{vin}/telematicData?containerId={cid}"
     raw = http_get(url, token)
@@ -220,19 +235,26 @@ def publish(data):
         sys.exit(1)
 
     vid = CONFIG["openwb_vehicle_id"]
-    c   = mqtt.Client(client_id="bmw_cardata_bridge", clean_session=True)
+    try:
+        c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
+                        client_id="bmw_cardata_bridge", clean_session=True)
+    except AttributeError:
+        # paho-mqtt < 2.0 Fallback
+        c = mqtt.Client(client_id="bmw_cardata_bridge", clean_session=True)
     c.connect(CONFIG["openwb_host"], CONFIG["openwb_port"], keepalive=10)
     c.loop_start()
     time.sleep(0.5)
 
     published = []
     if data["soc"] is not None:
-        c.publish(f"openWB/set/vehicle/{vid}/get/soc",
+        c.publish(f"openWB/set/mqtt/vehicle/{vid}/get/soc",
                   str(data["soc"]), qos=1, retain=True)
+        c.publish(f"openWB/set/mqtt/vehicle/{vid}/get/soc_timestamp",
+                  str(int(time.time())), qos=1, retain=True)
         published.append(f"SoC={data['soc']}%")
 
     if data["range_km"] is not None:
-        c.publish(f"openWB/set/vehicle/{vid}/get/range",
+        c.publish(f"openWB/set/mqtt/vehicle/{vid}/get/range",
                   str(data["range_km"]), qos=1, retain=True)
         published.append(f"Reichweite={data['range_km']}km")
 
@@ -262,7 +284,18 @@ def main():
 
     log.info("Start (VIN: ...%s)", CONFIG["vin"][-6:])
     token = get_token()
-    data  = fetch_data(token)
+
+    try:
+        data = fetch_data(token)
+    except urllib.error.HTTPError as e:
+        body = ""
+        try: body = e.read().decode()
+        except: pass
+        if e.code == 403 and "CU-429" in body:
+            log.warning("⚠ BMW API Tageslimit erreicht (50 Calls/Tag). Versuche es morgen wieder.")
+            sys.exit(0)
+        log.error("HTTP Fehler %s: %s", e.code, body[:300])
+        sys.exit(1)
 
     if args.test:
         print(f"\n  SoC:        {data['soc']}%")
