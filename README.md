@@ -2,7 +2,7 @@
 
 Proof of Concept: SoC, Reichweite und Ladestatus vom BMW via CarData REST-API in openWB 2.x anzeigen.
 
-Getestet mit BMW iX M60 + openWB Series 2. Kein Captcha, kein SSH-Zugang zur openWB nötig.
+Getestet mit BMW iX M60 + openWB Series 2 (SW 2.1.9). Kein Captcha, kein SSH-Zugang zur openWB nötig.
 
 ## Voraussetzungen
 
@@ -15,6 +15,12 @@ Getestet mit BMW iX M60 + openWB Series 2. Kein Captcha, kein SSH-Zugang zur ope
   - `vehicle.drivetrain.electricEngine.charging.status`
 - Python 3.8+ auf einem Gerät im Heimnetz (PC, NAS, Raspberry Pi)
 - openWB 2.x erreichbar im Heimnetz
+
+## openWB Fahrzeugeinstellungen
+
+In den openWB Fahrzeugeinstellungen folgendes einstellen:
+
+- **SoC-Modul:** MQTT
 
 ## Installation
 
@@ -33,7 +39,7 @@ In `bmw_cardata_bridge.py` diese 4 Zeilen anpassen:
 "openwb_vehicle_id": 1,   # Fahrzeug-ID in openWB prüfen!
 ```
 
-Die Fahrzeug-ID steht in den openWB Fahrzeugeinstellungen.
+Die Fahrzeug-ID steht in den openWB Fahrzeugeinstellungen (ID: X).
 
 ## Verwendung
 
@@ -60,10 +66,11 @@ python bmw_cardata_bridge.py
 
 ## Hinweise
 
-- BMW CarData REST-API: 50 Calls/Tag kostenlos → alle 30 Minuten = 48 Calls/Tag
+- BMW CarData REST-API: 50 Calls/Tag kostenlos
+- Erster Start: 2 Calls (Container-ID wird einmalig ermittelt und gespeichert)
+- Ab dem zweiten Start: nur noch 1 Call pro Durchlauf
 - Tokens werden automatisch erneuert, kein manueller Eingriff nötig
-- Container-ID wird automatisch ermittelt, muss nicht eingetragen werden
-- Ältere Modelle (i3, iDrive 6) senden Telemetriedaten seltener – bekannte BMW-Einschränkung
+- Bei Erreichen des Tageslimits: saubere Fehlermeldung, kein Absturz
 
 ## Getestet mit
 
