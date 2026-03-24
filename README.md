@@ -10,17 +10,30 @@ Getestet mit BMW iX M60 + openWB Series 2 (SW 2.1.9). Kein Captcha, kein SSH-Zug
   → https://www.bmw.de → Mein BMW → Fahrzeugdaten → BMW CarData
 - "Zugang zur CarData API beantragen" aktivieren
 - Mindestens diese Datenpunkte im Portal aktivieren:
-  - `vehicle.drivetrain.electricEngine.charging.level`
-  - `vehicle.drivetrain.electricEngine.remainingElectricRange`
-  - `vehicle.drivetrain.electricEngine.charging.status`
+  - `vehicle.drivetrain.electricEngine.charging.level` (neuere Fahrzeuge, z.B. iX, iX1, iX3 ab 2022)
+  - `vehicle.drivetrain.batteryManagement.header` (ältere Fahrzeuge, z.B. i3, iX3, G08 – als Fallback automatisch genutzt)
+  - `vehicle.drivetrain.electricEngine.remainingElectricRange` (Reichweite)
+  - `vehicle.drivetrain.electricEngine.charging.status` (Ladestatus)
 - Python 3.8+ auf einem Gerät im Heimnetz (PC, NAS, Raspberry Pi)
 - openWB 2.x erreichbar im Heimnetz
+
+## Fahrzeugkompatibilität
+
+| Fahrzeug | SoC-Feld | Ergebnis |
+|----------|----------|----------|
+| BMW iX M60 (2023) | `charging.level` | ✅ funktioniert |
+| BMW iX3 G08 | `batteryManagement.header` | ⚠️ bitte testen |
+| BMW i3s | `batteryManagement.header` | ⚠️ bitte testen |
+| Weitere Modelle | – | Feedback willkommen! |
+
+Das Script prüft automatisch beide Felder – kein manueller Eingriff nötig.
 
 ## openWB Fahrzeugeinstellungen
 
 In den openWB Fahrzeugeinstellungen folgendes einstellen:
 
 - **SoC-Modul:** MQTT
+- **Nur aktualisieren wenn angesteckt:** Nein
 
 ## Installation
 
@@ -71,13 +84,7 @@ python bmw_cardata_bridge.py
 - Ab dem zweiten Start: nur noch 1 Call pro Durchlauf
 - Tokens werden automatisch erneuert, kein manueller Eingriff nötig
 - Bei Erreichen des Tageslimits: saubere Fehlermeldung, kein Absturz
-
-## Getestet mit
-
-| Fahrzeug | Ergebnis |
-|----------|----------|
-| BMW iX M60 (2023) | ✅ funktioniert |
-| Weitere Modelle | Feedback willkommen! |
+- Der Wert wird nach dem konfigurierten Intervall in openWB übernommen. Sofortige Aktualisierung per Kreispfeil (🔄) auf der Hauptseite möglich.
 
 ## Dateien
 
