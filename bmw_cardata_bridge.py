@@ -181,8 +181,31 @@ def fetch_data(token):
         raw = http_get(f"{BMW_API}/customers/containers", token)
         cs  = raw if isinstance(raw, list) else raw.get("containers", [])
         act = [c for c in cs if c.get("state") == "ACTIVE"]
+        # Prüfen ob überhaupt Container vorhanden
+        if not cs:
+            raise RuntimeError(
+                "Keine Container gefunden!\n"
+                "  → Bitte im BMW CarData Portal den Stream einrichten:\n"
+                "  → https://www.bmw.de → Mein BMW → Fahrzeugdaten → BMW CarData\n"
+                "  → 'Datenauswahl ändern' klicken und Datenpunkte aktivieren:\n"
+                "     - vehicle.drivetrain.electricEngine.charging.level\n"
+                "     - vehicle.drivetrain.batteryManagement.header\n"
+                "     - vehicle.drivetrain.electricEngine.remainingElectricRange\n"
+                "     - vehicle.drivetrain.electricEngine.charging.status"
+            )
+
+        # Prüfen ob aktive Container vorhanden
+        inactive = [c for c in cs if c.get("state") != "ACTIVE"]
+        if not act and inactive:
+            raise RuntimeError(
+                f"Container gefunden aber nicht aktiv (Status: {inactive[0].get('state')})!\n"
+                "  → Bitte im BMW CarData Portal den Stream aktivieren:\n"
+                "  → https://www.bmw.de → Mein BMW → Fahrzeugdaten → BMW CarData\n"
+                "  → 'Datenauswahl ändern' klicken und Datenpunkte speichern"
+            )
+
         if not act:
-            raise RuntimeError("Keine aktiven Container!")
+            raise RuntimeError("Keine aktiven Container gefunden!")
         cid = act[0].get("containerId") or act[0].get("id")
         # Container-ID in Token-Datei speichern → kein extra Call mehr nötig
         tokens = load_tokens() or {}
