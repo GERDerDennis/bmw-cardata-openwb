@@ -4,18 +4,25 @@ Proof of Concept: SoC, Reichweite und Ladestatus vom BMW via CarData REST-API in
 
 Getestet mit BMW iX M60 + openWB Series 2 (SW 2.1.9). Kein Captcha, kein SSH-Zugang zur openWB nötig.
 
+> ⚠️ **Hinweis:** BMW CarData liefert nicht bei allen Accounts automatisch Container.
+> Dieses Repository enthält Tools zur Diagnose und optionalen Erstellung.
+
+---
+
 ## Voraussetzungen
 
 - BMW CarData Account mit eingerichteter Client ID
-  → https://www.bmw.de → Mein BMW → Fahrzeugdaten → BMW CarData
-- "Zugang zur CarData API beantragen" aktivieren
+  → [BMW ConnectedDrive](https://www.bmw.de) → Mein BMW → Fahrzeugdaten → BMW CarData
+- „Zugang zur CarData API beantragen" aktivieren
 - Mindestens diese Datenpunkte im Portal aktivieren:
-  - `vehicle.drivetrain.electricEngine.charging.level` (neuere Fahrzeuge, z.B. iX, iX1, iX3 ab 2022)
-  - `vehicle.drivetrain.batteryManagement.header` (ältere Fahrzeuge, z.B. i3, iX3, G08 – als Fallback automatisch genutzt)
-  - `vehicle.drivetrain.electricEngine.remainingElectricRange` (Reichweite)
-  - `vehicle.drivetrain.electricEngine.charging.status` (Ladestatus)
+  - `vehicle.drivetrain.electricEngine.charging.level` (neuere Fahrzeuge)
+  - `vehicle.drivetrain.batteryManagement.header` (Fallback für ältere Modelle)
+  - `vehicle.drivetrain.electricEngine.remainingElectricRange`
+  - `vehicle.drivetrain.electricEngine.charging.status`
 - Python 3.8+ auf einem Gerät im Heimnetz (PC, NAS, Raspberry Pi)
 - openWB 2.x erreichbar im Heimnetz
+
+---
 
 ## Fahrzeugkompatibilität
 
@@ -28,12 +35,14 @@ Getestet mit BMW iX M60 + openWB Series 2 (SW 2.1.9). Kein Captcha, kein SSH-Zug
 
 Das Script prüft automatisch beide Felder – kein manueller Eingriff nötig.
 
-## openWB Fahrzeugeinstellungen
+---
 
-In den openWB Fahrzeugeinstellungen folgendes einstellen:
+## openWB Fahrzeugeinstellungen
 
 - **SoC-Modul:** MQTT
 - **Nur aktualisieren wenn angesteckt:** Nein
+
+---
 
 ## Installation
 
@@ -41,55 +50,143 @@ In den openWB Fahrzeugeinstellungen folgendes einstellen:
 pip install paho-mqtt
 ```
 
+---
+
 ## Konfiguration
 
-In `bmw_cardata_bridge.py` diese 4 Zeilen anpassen:
+In `bmw_cardata_bridge.py` diese Werte anpassen:
 
 ```python
 "client_id":         "DEINE_CARDATA_CLIENT_ID",
 "vin":               "DEINE_VIN_17_STELLIG",
 "openwb_host":       "192.168.x.x",
-"openwb_vehicle_id": 1,   # Fahrzeug-ID in openWB prüfen!
+"openwb_vehicle_id": 1
 ```
 
-Die Fahrzeug-ID steht in den openWB Fahrzeugeinstellungen (ID: X).
+---
 
 ## Verwendung
 
-**Schritt 1 – Einmalige Authentifizierung:**
+### 1. Einmalige Authentifizierung
+
 ```bash
 python bmw_cardata_bridge.py --auth
 ```
-Browser öffnet sich automatisch → mit BMW-Konto bestätigen → fertig.
 
-**Schritt 2 – Testlauf (ohne MQTT):**
+Browser öffnet sich automatisch → mit BMW-Konto bestätigen.
+
+### 2. Testlauf (ohne MQTT)
+
 ```bash
 python bmw_cardata_bridge.py --test
 ```
 
-**Schritt 3 – Echter Lauf:**
+### 3. Normalbetrieb
+
 ```bash
 python bmw_cardata_bridge.py
 ```
 
-**Automatisch alle 30 Minuten (Cron):**
+### Cron (alle 30 Minuten)
+
 ```bash
 */30 * * * * python3 /pfad/bmw_cardata_bridge.py
 ```
 
-## Hinweise
+---
 
-- BMW CarData REST-API: 50 Calls/Tag kostenlos
-- Erster Start: 2 Calls (Container-ID wird einmalig ermittelt und gespeichert)
-- Ab dem zweiten Start: nur noch 1 Call pro Durchlauf
-- Tokens werden automatisch erneuert, kein manueller Eingriff nötig
-- Bei Erreichen des Tageslimits: saubere Fehlermeldung, kein Absturz
-- Der Wert wird nach dem konfigurierten Intervall in openWB übernommen. Sofortige Aktualisierung per Kreispfeil (🔄) auf der Hauptseite möglich.
+## Container-Diagnose & Debugging
+
+In manchen Fällen liefert BMW trotz korrekter Einrichtung keine Container:
+
+```json
+{
+  "containers": []
+}
+```
+
+Ohne Container können keine Telematikdaten (SoC, Reichweite, Status) abgerufen werden.
+
+### Diagnose mit Testscript
+
+```bash
+python bmw_cardata_test.py --auth
+python bmw_cardata_test.py --test
+```
+
+### Mögliche Ergebnisse
+
+| Status | Bedeutung |
+|--------|-----------|
+| `KEIN CONTAINER VORHANDEN` | BMW liefert aktuell keinen Container |
+| `AKTIVER CONTAINER GEFUNDEN` | Telematikdaten sollten abrufbar sein |
+
+### Container manuell erstellen (Debug)
+
+Falls keine Container vorhanden sind:
+
+```bash
+python bmw_cardata_test.py --create-container
+```
+
+Erfolgreiches Ergebnis:
+
+```json
+{
+  "containerId": "...",
+  "state": "ACTIVE"
+}
+```
+
+Danach sollte `--test` direkt Daten liefern.
+
+### Wichtige Hinweise zur Container-Erstellung
+
+- Container-Erstellung ist aktuell eine Debug-/Entwicklerfunktion
+- Funktioniert nicht bei allen BMW Accounts
+- BMW erstellt Container normalerweise automatisch (nicht deterministisch)
+- Dieses Script hilft, fehlende Container gezielt zu analysieren
+
+### Typisches Problem
+
+Häufiger Zustand:
+
+```
+Auth funktioniert       ✔
+Mapping vorhanden       ✔
+basicData funktioniert  ✔
+Container fehlen        ❌
+```
+
+→ Lösung: `--create-container` testen
+
+---
+
+## API Limits
+
+- BMW CarData API: **50 Calls/Tag** kostenlos
+- Erster Start: ca. 2 Calls
+- Danach: 1 Call pro Durchlauf
+
+---
+
+## Weitere Hinweise
+
+- Tokens werden automatisch erneuert – keine manuelle Pflege nötig
+- Bei Erreichen des API-Limits → saubere Fehlermeldung statt Absturz
+- Werte werden zyklisch aktualisiert
+- Manuelle Aktualisierung über openWB UI möglich
+
+---
 
 ## Dateien
 
-- `bmw_cardata_bridge.py` – Hauptscript mit MQTT-Publishing an openWB
-- `bmw_cardata_test.py` – Test-Script ohne MQTT, zeigt rohe API-Antwort
+| Datei | Beschreibung |
+|-------|-------------|
+| `bmw_cardata_bridge.py` | Hauptscript – sendet SoC via MQTT an openWB |
+| `bmw_cardata_test.py` | Diagnose- und Testtool |
+
+---
 
 ## Lizenz
 
