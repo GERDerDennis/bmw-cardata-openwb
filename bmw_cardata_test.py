@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-BMW CarData – Auth & Test (keine pip-Abhängigkeiten!)
-======================================================
-Nur Python 3.x Standardbibliothek – läuft sofort ohne pip install.
+BMW CarData – Auth, Test & optional Container Create
+====================================================
+
+Nur Python 3.x Standardbibliothek – läuft ohne pip install.
 
 Verwendung:
-    python bmw_cardata_test.py --auth     # Einmalige Authentifizierung
-    python bmw_cardata_test.py --test     # Fahrzeugdaten abrufen + anzeigen
+    python bmw_cardata_test.py --auth
+    python bmw_cardata_test.py --test
+    python bmw_cardata_test.py --create-container
+    python bmw_cardata_test.py --create-container --force
 """
 
 import argparse
@@ -23,22 +26,37 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-# ─────────────────────────────────────────────────────────────
-# KONFIGURATION – hier anpassen!
-# ─────────────────────────────────────────────────────────────
 CONFIG = {
     "client_id": "DEINE_CARDATA_CLIENT_ID",
     "vin": "DEINE_VIN_17_STELLIG",
     "token_file": str(Path.home() / ".bmw_cardata_tokens.json"),
+    "scope": "authenticate_user openid cardata:api:read cardata:streaming:read",
+    "container_name": "ChargeStats",
+    "container_purpose": "openWB",
+    "container_descriptors": [
+        "vehicle.drivetrain.electricEngine.charging.status",
+        "vehicle.drivetrain.batteryManagement.header",
+        "vehicle.drivetrain.electricEngine.remainingElectricRange",
+    ],
 }
 
 BMW_AUTH_URL = "https://customer.bmwgroup.com/gcdm/oauth"
 BMW_API_URL = "https://api-cardata.bmwgroup.com"
 
-# ─────────────────────────────────────────────────────────────
-# HTTP HILFSFUNKTIONEN (ohne requests)
-# ─────────────────────────────────────────────────────────────
-def http_post(url, data: dict, headers: dict = None) -> dict:
+FIELD_SOC = "vehicle.drivetrain.electricEngine.charging.level"
+FIELD_SOC_ALT = "vehicle.drivetrain.batteryManagement.header"
+FIELD_SOC_OLD = "vehicle.trip.segment.end.drivetrain.batteryManagement.hvSoc"
+FIELD_RANGE = "vehicle.drivetrain.electricEngine.remainingElectricRange"
+FIELD_STATUS = "vehicle.drivetrain.electricEngine.charging.status"
+FIELD_ODOMETER_CANDIDATES = [
+    "vehicle.vehicleMileage",
+    "vehicle.vehicle.mileage",
+    "vehicle.odometer",
+    "vehicle.mileage",
+]
+
+
+def http_post_form(url, data: dict, headers: dict = None) -> dict:
     encoded = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(url, data=encoded, method="POST")
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
@@ -46,7 +64,20 @@ def http_post(url, data: dict, headers: dict = None) -> dict:
     if headers:
         for k, v in headers.items():
             req.add_header(k, v)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode())
 
+
+def http_post_json(url, payload: dict, token: str) -> dict:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+    )
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/json")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("x-version", "v1")
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode())
 
@@ -56,7 +87,6 @@ def http_get(url, access_token: str) -> dict:
     req.add_header("Authorization", f"Bearer {access_token}")
     req.add_header("Accept", "application/json")
     req.add_header("x-version", "v1")
-
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode())
@@ -66,9 +96,6 @@ def http_get(url, access_token: str) -> dict:
         raise
 
 
-# ─────────────────────────────────────────────────────────────
-# PKCE
-# ─────────────────────────────────────────────────────────────
 def generate_pkce_pair():
     code_verifier = secrets.token_urlsafe(64)
     digest = hashlib.sha256(code_verifier.encode()).digest()
@@ -76,9 +103,6 @@ def generate_pkce_pair():
     return code_verifier, code_challenge
 
 
-# ─────────────────────────────────────────────────────────────
-# TOKEN VERWALTUNG
-# ─────────────────────────────────────────────────────────────
 def save_tokens(tokens: dict):
     data = {
         "access_token": tokens.get("access_token"),
@@ -110,7 +134,7 @@ def get_valid_token() -> str:
 
     print("Access Token abgelaufen – führe Refresh durch...")
     try:
-        new = http_post(
+        new = http_post_form(
             f"{BMW_AUTH_URL}/token",
             {
                 "grant_type": "refresh_token",
@@ -127,9 +151,6 @@ def get_valid_token() -> str:
     return new["access_token"]
 
 
-# ─────────────────────────────────────────────────────────────
-# DEVICE CODE FLOW
-# ─────────────────────────────────────────────────────────────
 def run_auth():
     print("\n" + "=" * 55)
     print("  BMW CarData – Authentifizierung (Device Code Flow)")
@@ -139,12 +160,12 @@ def run_auth():
 
     print("\n[1/3] Fordere Device Code an...")
     try:
-        device_data = http_post(
+        device_data = http_post_form(
             f"{BMW_AUTH_URL}/device/code",
             {
                 "client_id": CONFIG["client_id"],
                 "response_type": "device_code",
-                "scope": "authenticate_user openid cardata:api:read cardata:streaming:read",
+                "scope": CONFIG["scope"],
                 "code_challenge": code_challenge,
                 "code_challenge_method": "S256",
             },
@@ -153,7 +174,7 @@ def run_auth():
         body = e.read().decode() if hasattr(e, "read") else ""
         print("\nMögliche Ursachen:")
         print("  → client_id falsch eingetragen?")
-        print("  → Subscription 'cardata:api:read' im Portal aktiviert?")
+        print("  → erforderliche Scopes im BMW Portal nicht aktiviert?")
         if body:
             print(f"\nAPI Antwort: {body}")
         sys.exit(1)
@@ -183,9 +204,8 @@ def run_auth():
     deadline = time.time() + expires_in
     while time.time() < deadline:
         time.sleep(interval + 1)
-
         try:
-            token_resp = http_post(
+            token_resp = http_post_form(
                 f"{BMW_AUTH_URL}/token",
                 {
                     "client_id": CONFIG["client_id"],
@@ -200,16 +220,14 @@ def run_auth():
             print("\n  Jetzt testen mit:")
             print("  python bmw_cardata_test.py --test")
             return
-
         except urllib.error.HTTPError as e:
             body = e.read().decode() if hasattr(e, "read") else ""
-
             err = ""
             try:
                 parsed = json.loads(body) if body else {}
                 err = parsed.get("error", "")
             except Exception:
-                parsed = {}
+                pass
 
             if err == "authorization_pending":
                 print(".", end="", flush=True)
@@ -231,9 +249,11 @@ def run_auth():
     sys.exit(1)
 
 
-# ─────────────────────────────────────────────────────────────
-# CONTAINER DIAGNOSE
-# ─────────────────────────────────────────────────────────────
+def get_containers(token: str):
+    raw = http_get(f"{BMW_API_URL}/customers/containers", token)
+    return raw if isinstance(raw, list) else raw.get("containers", [])
+
+
 def diagnose_containers(containers_raw):
     containers = (
         containers_raw
@@ -254,11 +274,9 @@ def diagnose_containers(containers_raw):
         print("\n  Hinweis:")
         print("    Die aktuelle Implementierung kann ohne vorhandenen Container")
         print("    keine Telematikdaten abrufen.")
-        print("    Das ist nicht zwingend ein Fehler bei Client-ID oder VIN.")
         return None
 
     print(f"  Anzahl Container: {len(containers)}")
-
     active = []
     for idx, container in enumerate(containers, start=1):
         cid = container.get("containerId") or container.get("id")
@@ -270,9 +288,6 @@ def diagnose_containers(containers_raw):
 
     if not active:
         print("\n  Status: CONTAINER VORHANDEN, ABER KEINER AKTIV")
-        print("  Bewertung:")
-        print("    - Container wurden gefunden")
-        print("    - Aktuell ist jedoch keiner im Zustand ACTIVE")
         return None
 
     cid = active[0].get("containerId") or active[0].get("id")
@@ -280,9 +295,131 @@ def diagnose_containers(containers_raw):
     return cid
 
 
-# ─────────────────────────────────────────────────────────────
-# FAHRZEUGDATEN ABRUFEN
-# ─────────────────────────────────────────────────────────────
+def create_container(token: str):
+    descriptors = CONFIG.get("container_descriptors") or []
+    if not descriptors:
+        raise RuntimeError("CONFIG['container_descriptors'] ist leer.")
+
+    body = {
+        "name": CONFIG.get("container_name", "ChargeStats"),
+        "purpose": CONFIG.get("container_purpose", "openWB"),
+        "technicalDescriptors": descriptors,
+    }
+
+    print(f"\n{'─' * 55}")
+    print("  CONTAINER-ERSTELLUNG:")
+    print(f"{'─' * 55}")
+    print("  Body:")
+    print(json.dumps(body, indent=2, ensure_ascii=False))
+
+    try:
+        resp = http_post_json(f"{BMW_API_URL}/customers/containers", body, token)
+    except urllib.error.HTTPError as e:
+        body_txt = e.read().decode() if hasattr(e, "read") else ""
+        print(f"\n  ❌ Container-Erstellung fehlgeschlagen: HTTP {e.code}")
+        print(f"  Antwort: {body_txt or 'keine Details'}")
+        raise
+
+    print("\n  Antwort:")
+    print(json.dumps(resp, indent=2, ensure_ascii=False))
+
+    new_id = resp.get("containerId") or resp.get("id")
+    if not new_id:
+        raise RuntimeError(
+            f"Container konnte nicht erstellt werden: {json.dumps(resp, ensure_ascii=False)}"
+        )
+
+    print(f"\n  ✓ Container erstellt: {new_id}")
+    return new_id
+
+
+def extract_preferred_values(telematic_data: dict) -> dict:
+    td = telematic_data.get("telematicData", telematic_data)
+
+    def entry(key):
+        value = td.get(key)
+        return value if isinstance(value, dict) else None
+
+    def scalar(key):
+        e = entry(key)
+        return e.get("value") if e else None
+
+    preferred_soc_key = None
+    preferred_soc_value = None
+
+    for key in [FIELD_SOC, FIELD_SOC_ALT, FIELD_SOC_OLD]:
+        val = scalar(key)
+        if val is not None:
+            preferred_soc_key = key
+            preferred_soc_value = val
+            break
+
+    range_value = scalar(FIELD_RANGE)
+    status_value = scalar(FIELD_STATUS)
+
+    odometer_key = None
+    odometer_value = None
+    for key in FIELD_ODOMETER_CANDIDATES:
+        val = scalar(key)
+        if val is not None:
+            odometer_key = key
+            odometer_value = val
+            break
+
+    return {
+        "soc_key": preferred_soc_key,
+        "soc_value": preferred_soc_value,
+        "range_key": FIELD_RANGE if range_value is not None else None,
+        "range_value": range_value,
+        "status_key": FIELD_STATUS if status_value is not None else None,
+        "status_value": status_value,
+        "odometer_key": odometer_key,
+        "odometer_value": odometer_value,
+    }
+
+
+def run_create_container(force: bool = False):
+    print("\n" + "=" * 55)
+    print("  BMW CarData – Container erstellen (Prototyp)")
+    print("=" * 55)
+
+    token = get_valid_token()
+
+    print("\n  Vorabprüfung vorhandener Container...")
+    containers = get_containers(token)
+    existing_id = diagnose_containers({"containers": containers})
+
+    if existing_id and not force:
+        print("\n  Es existiert bereits ein aktiver Container. Keine Neuerstellung nötig.")
+        print("  Mit --force kann trotzdem ein zusätzlicher Container erstellt werden.")
+        return
+
+    if existing_id and force:
+        print("\n  Hinweis: Es existiert bereits ein aktiver Container.")
+        print("  Debug-Modus aktiv: Erstelle trotzdem einen zusätzlichen Container...")
+
+    try:
+        new_id = create_container(token)
+    except Exception as e:
+        print(f"\n  ❌ Abbruch: {e}")
+        sys.exit(1)
+
+    print("\n  Prüfe Containerliste erneut...")
+    containers_after = get_containers(token)
+    diagnose_containers({"containers": containers_after})
+
+    print(f"\n  Teste telematicData mit Container {new_id} ...")
+    try:
+        url = f"{BMW_API_URL}/customers/vehicles/{CONFIG['vin']}/telematicData?containerId={new_id}"
+        result = http_get(url, token)
+        print("\n  ✓ telematicData Antwort:")
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode() if hasattr(e, "read") else ""
+        print(f"\n  ❌ telematicData fehlgeschlagen: HTTP {e.code}")
+        print(f"  Antwort: {body or 'keine Details'}")
+
+
 def run_test():
     print("\n" + "=" * 55)
     print("  BMW CarData – Fahrzeugdaten Test")
@@ -301,7 +438,6 @@ def run_test():
     ]
 
     all_data = {}
-
     for url in endpoints:
         try:
             print(f"  → GET {url}")
@@ -323,9 +459,7 @@ def run_test():
 
     containers_url = f"{BMW_API_URL}/customers/containers"
     if containers_url in all_data:
-        containers_raw = all_data[containers_url]
-        cid = diagnose_containers(containers_raw)
-
+        cid = diagnose_containers(all_data[containers_url])
         if cid:
             turl = f"{BMW_API_URL}/customers/vehicles/{vin}/telematicData?containerId={cid}"
             try:
@@ -341,13 +475,41 @@ def run_test():
                 print(f"     ✗ Fehler {e.code}")
 
     print(f"\n{'─' * 55}")
-    print("  GEFUNDENE SoC/LADE-WERTE:")
+    print("  BEVORZUGTE AUSWERTUNG:")
     print(f"{'─' * 55}")
 
+    telematic = all_data.get("telematicData")
+    if telematic:
+        preferred = extract_preferred_values(telematic)
+
+        if preferred["soc_key"]:
+            print(f"  SoC: {preferred['soc_value']}  ({preferred['soc_key']})")
+        else:
+            print("  SoC: nicht gefunden")
+
+        if preferred["range_key"]:
+            print(f"  Reichweite: {preferred['range_value']}  ({preferred['range_key']})")
+        else:
+            print("  Reichweite: nicht gefunden")
+
+        if preferred["status_key"]:
+            print(f"  Ladestatus: {preferred['status_value']}  ({preferred['status_key']})")
+        else:
+            print("  Ladestatus: nicht gefunden")
+
+        if preferred["odometer_key"]:
+            print(f"  Kilometerstand: {preferred['odometer_value']}  ({preferred['odometer_key']})")
+        else:
+            print("  Kilometerstand: nicht gefunden")
+    else:
+        print("  Keine telematicData vorhanden.")
+
+    print(f"\n{'─' * 55}")
+    print("  GEFUNDENE SoC/LADE-WERTE:")
+    print(f"{'─' * 55}")
     found = {}
     for data in all_data.values():
         found.update(extract_values(data))
-
     if found:
         for key, value in found.items():
             print(f"  {key}: {value}")
@@ -356,17 +518,11 @@ def run_test():
 
 
 def extract_values(data) -> dict:
-    """Sucht SoC, Reichweite und Ladestatus in der API-Antwort."""
     result = {}
-    soc_keys = [
-        "chargingLevelPercent",
-        "batteryLevel",
-        "soc",
-        "electricChargingState",
-        "remainingChargingPercent",
-    ]
+    soc_keys = ["chargingLevelPercent", "batteryLevel", "soc", "electricChargingState", "remainingChargingPercent"]
     range_keys = ["range", "electricRange", "remainingRange"]
     charging_keys = ["chargingStatus", "isCharging", "chargingActive"]
+    odometer_keys = ["mileage", "odometer", "vehicleMileage", "kilometer"]
 
     def search(obj, path=""):
         if isinstance(obj, dict):
@@ -381,55 +537,62 @@ def extract_values(data) -> dict:
                 for ck in charging_keys:
                     if ck.lower() in k.lower():
                         result[f"Ladestatus → {full_path}"] = v
+                for ok in odometer_keys:
+                    if ok.lower() in k.lower():
+                        result[f"Kilometer → {full_path}"] = v
                 search(v, full_path)
-
         elif isinstance(obj, list):
             for i, item in enumerate(obj):
                 search(item, f"{path}[{i}]")
                 if isinstance(item, dict) and "name" in item and "value" in item:
-                    name = item["name"]
+                    name = str(item["name"])
                     value = item["value"]
-                    if any(k in name for k in ["charging", "battery", "range", "electric"]):
-                        result[name] = value
+                    if any(k.lower() in name.lower() for k in soc_keys):
+                        result[f"SoC → {name}"] = value
+                    if any(k.lower() in name.lower() for k in range_keys):
+                        result[f"Reichweite → {name}"] = value
+                    if any(k.lower() in name.lower() for k in charging_keys):
+                        result[f"Ladestatus → {name}"] = value
+                    if any(k.lower() in name.lower() for k in odometer_keys):
+                        result[f"Kilometer → {name}"] = value
 
     search(data)
     return result
 
 
-# ─────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────
 def main():
     if CONFIG["client_id"] == "DEINE_CLIENT_ID_HIER":
         print("\nFEHLER: client_id nicht eingetragen!")
-        print("  Öffne bmw_cardata_test.py und trage deine Client ID ein.")
-        input("\nEnter drücken zum Beenden...")
         sys.exit(1)
-
     if CONFIG["vin"] == "DEINE_VIN_HIER":
         print("\nFEHLER: VIN nicht eingetragen!")
-        print("  Öffne bmw_cardata_test.py und trage deine VIN ein.")
-        input("\nEnter drücken zum Beenden...")
         sys.exit(1)
 
-    parser = argparse.ArgumentParser(description="BMW CarData Test (kein pip nötig)")
+    parser = argparse.ArgumentParser(description="BMW CarData Test")
     parser.add_argument("--auth", action="store_true", help="Authentifizierung starten")
     parser.add_argument("--test", action="store_true", help="Fahrzeugdaten abrufen")
+    parser.add_argument("--create-container", action="store_true", help="Container-Erstellung testen")
+    parser.add_argument("--force", action="store_true", help="Mit --create-container auch bei vorhandenen Containern neu erstellen")
     args = parser.parse_args()
 
-    if not args.auth and not args.test:
+    if not args.auth and not args.test and not args.create_container:
         print("\nVerwendung:")
-        print("  python bmw_cardata_test.py --auth   (einmalige Authentifizierung)")
-        print("  python bmw_cardata_test.py --test   (Fahrzeugdaten abrufen)")
-        input("\nEnter drücken zum Beenden...")
+        print("  python bmw_cardata_test.py --auth")
+        print("  python bmw_cardata_test.py --test")
+        print("  python bmw_cardata_test.py --create-container")
+        print("  python bmw_cardata_test.py --create-container --force")
         sys.exit(0)
+
+    if args.force and not args.create_container:
+        print("\n--force kann nur zusammen mit --create-container verwendet werden.")
+        sys.exit(1)
 
     if args.auth:
         run_auth()
     elif args.test:
         run_test()
-
-    input("\nEnter drücken zum Beenden...")
+    elif args.create_container:
+        run_create_container(force=args.force)
 
 
 if __name__ == "__main__":
