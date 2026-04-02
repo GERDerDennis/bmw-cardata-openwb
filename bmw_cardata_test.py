@@ -10,6 +10,8 @@ Verwendung:
     python bmw_cardata_test.py --test
     python bmw_cardata_test.py --create-container
     python bmw_cardata_test.py --create-container --force
+    python bmw_cardata_test.py --delete-container <CONTAINER_ID>
+    python bmw_cardata_test.py --dump
 """
 
 import argparse
@@ -27,16 +29,18 @@ import webbrowser
 from pathlib import Path
 
 CONFIG = {
-    "client_id": "DEINE_CARDATA_CLIENT_ID",
-    "vin": "DEINE_VIN_17_STELLIG",
+    "client_id": "DEINE_CLIENT_ID_HIER",
+    "vin": "DEINE_VIN_HIER",
     "token_file": str(Path.home() / ".bmw_cardata_tokens.json"),
     "scope": "authenticate_user openid cardata:api:read cardata:streaming:read",
     "container_name": "ChargeStats",
     "container_purpose": "openWB",
     "container_descriptors": [
         "vehicle.drivetrain.electricEngine.charging.status",
+        "vehicle.drivetrain.electricEngine.charging.level",
         "vehicle.drivetrain.batteryManagement.header",
         "vehicle.drivetrain.electricEngine.remainingElectricRange",
+        "vehicle.vehicle.travelledDistance",
     ],
 }
 
@@ -49,10 +53,8 @@ FIELD_SOC_OLD = "vehicle.trip.segment.end.drivetrain.batteryManagement.hvSoc"
 FIELD_RANGE = "vehicle.drivetrain.electricEngine.remainingElectricRange"
 FIELD_STATUS = "vehicle.drivetrain.electricEngine.charging.status"
 FIELD_ODOMETER_CANDIDATES = [
-    "vehicle.vehicleMileage",
-    "vehicle.vehicle.mileage",
-    "vehicle.odometer",
-    "vehicle.mileage",
+    "vehicle.vehicle.travelledDistance",
+    "vehicle.trip.segment.end.travelledDistance",
 ]
 
 
@@ -90,6 +92,22 @@ def http_get(url, access_token: str) -> dict:
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        print(f"\nHTTP Fehler {e.code}: {body[:500]}")
+        raise
+
+
+
+def http_delete(url: str, access_token: str):
+    req = urllib.request.Request(url, method="DELETE")
+    req.add_header("Authorization", f"Bearer {access_token}")
+    req.add_header("Accept", "application/json")
+    req.add_header("x-version", "v1")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode()
+            return json.loads(body) if body else {}
     except urllib.error.HTTPError as e:
         body = e.read().decode()
         print(f"\nHTTP Fehler {e.code}: {body[:500]}")
@@ -278,20 +296,28 @@ def diagnose_containers(containers_raw):
 
     print(f"  Anzahl Container: {len(containers)}")
     active = []
+    openwb = []
     for idx, container in enumerate(containers, start=1):
         cid = container.get("containerId") or container.get("id")
         name = container.get("name", "?")
         state = container.get("state", "UNKNOWN")
-        print(f"  [{idx}] ID={cid} | Name={name} | Status={state}")
+        purpose = container.get("purpose", "")
+        marker = " ← openWB" if purpose == CONFIG["container_purpose"] else ""
+        print(f"  [{idx}] ID={cid} | Name={name} | Status={state}{marker}")
         if state == "ACTIVE":
             active.append(container)
+            if purpose == CONFIG["container_purpose"]:
+                openwb.append(container)
 
     if not active:
         print("\n  Status: CONTAINER VORHANDEN, ABER KEINER AKTIV")
         return None
 
-    cid = active[0].get("containerId") or active[0].get("id")
-    print(f"\n  Status: AKTIVER CONTAINER GEFUNDEN ({cid})")
+    # Bevorzuge openWB-Container
+    preferred = openwb if openwb else active
+    cid = preferred[0].get("containerId") or preferred[0].get("id")
+    label = "openWB-Container" if openwb else "Container (kein openWB-Container gefunden)"
+    print(f"\n  Status: AKTIVER {label.upper()} GEFUNDEN ({cid})")
     return cid
 
 
@@ -560,6 +586,103 @@ def extract_values(data) -> dict:
     return result
 
 
+def run_dump():
+    print("\n" + "=" * 55)
+    print("  BMW CarData – Alle Datenpunkte (Dump)")
+    print("=" * 55)
+    print("  Bitte diese Ausgabe im Forum posten.")
+    print("  Deine VIN und Tokens sind NICHT enthalten.")
+
+    token = get_valid_token()
+    vin = CONFIG["vin"]
+
+    # Alle aktiven Container abrufen
+    try:
+        raw = http_get(f"{BMW_API_URL}/customers/containers", token)
+        containers = raw if isinstance(raw, list) else raw.get("containers", [])
+        active = [c for c in containers if c.get("state") == "ACTIVE"]
+        if not active:
+            print("\n  Kein aktiver Container gefunden.")
+            print("  Bitte zuerst: python bmw_cardata_test.py --create-container")
+            sys.exit(1)
+    except Exception as e:
+        print(f"\n  Fehler beim Container-Abruf: {e}")
+        sys.exit(1)
+
+    print(f"\n  VIN: ...{vin[-6:]} (gekürzt)")
+    print(f"  Aktive Container: {len(active)}")
+
+    # Alle Container zusammenführen
+    all_datapoints = {}
+    for container in active:
+        cid = container.get("containerId") or container.get("id")
+        name = container.get("name", "unbekannt")
+        print(f"\n  → Lese Container: {cid} ({name})")
+        try:
+            url = f"{BMW_API_URL}/customers/vehicles/{vin}/telematicData?containerId={cid}"
+            result = http_get(url, token)
+            td = result.get("telematicData", {})
+            all_datapoints.update(td)
+            print(f"     {len(td)} Datenpunkte gefunden")
+        except Exception as e:
+            print(f"     Fehler: {e}")
+
+    print(f"\n{'─' * 55}")
+    print(f"  ALLE DATENPUNKTE ({len(all_datapoints)} gesamt):")
+    print(f"{'─' * 55}")
+
+    if not all_datapoints:
+        print("  (keine Datenpunkte vorhanden)")
+    else:
+        for key, value in sorted(all_datapoints.items()):
+            if isinstance(value, dict):
+                val = value.get("value", "–")
+                unit = value.get("unit", "")
+                print(f"  {key}: {val} {unit}".rstrip())
+            else:
+                print(f"  {key}: {value}")
+
+    print(f"\n{'─' * 55}")
+    print("  Fahrzeugmodell aus basicData:")
+    print(f"{'─' * 55}")
+    try:
+        basic = http_get(f"{BMW_API_URL}/customers/vehicles/{vin}/basicData", token)
+        brand = basic.get("brand", "BMW").replace("BMW_I", "BMW i").replace("_", " ")
+        model = basic.get("modelName") or basic.get("series") or "unbekannt"
+        drivetrain = basic.get("driveTrain", "")
+        series_devt = basic.get("seriesDevt", "")
+        print(f"  {brand} {model} ({series_devt}, {drivetrain})")
+    except Exception:
+        print("  (nicht verfügbar)")
+
+    print(f"\n{'─' * 55}")
+    print("  Bitte diese Ausgabe inkl. Fahrzeugmodell im Forum posten!")
+    print(f"{'─' * 55}")
+
+
+def run_delete_container(container_id: str):
+    print("\n" + "=" * 55)
+    print("  BMW CarData – Container löschen")
+    print("=" * 55)
+
+    token = get_valid_token()
+
+    print(f"\n  Lösche Container: {container_id} ...")
+    try:
+        http_delete(f"{BMW_API_URL}/customers/containers/{container_id}", token)
+        print(f"  ✓ Container {container_id} gelöscht.")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode() if hasattr(e, "read") else ""
+        print(f"  ❌ Löschen fehlgeschlagen: HTTP {e.code}")
+        print(f"  Antwort: {body or 'keine Details'}")
+        sys.exit(1)
+
+    print("\n  Aktuelle Containerliste:")
+    containers = get_containers(token)
+    diagnose_containers({"containers": containers})
+
+
+
 def main():
     if CONFIG["client_id"] == "DEINE_CLIENT_ID_HIER":
         print("\nFEHLER: client_id nicht eingetragen!")
@@ -573,14 +696,18 @@ def main():
     parser.add_argument("--test", action="store_true", help="Fahrzeugdaten abrufen")
     parser.add_argument("--create-container", action="store_true", help="Container-Erstellung testen")
     parser.add_argument("--force", action="store_true", help="Mit --create-container auch bei vorhandenen Containern neu erstellen")
+    parser.add_argument("--delete-container", metavar="CONTAINER_ID", help="Container mit angegebener ID löschen")
+    parser.add_argument("--dump", action="store_true", help="Alle Datenpunkte ausgeben (für Forum-Support)")
     args = parser.parse_args()
 
-    if not args.auth and not args.test and not args.create_container:
+    if not args.auth and not args.test and not args.create_container and not args.delete_container and not args.dump:
         print("\nVerwendung:")
         print("  python bmw_cardata_test.py --auth")
         print("  python bmw_cardata_test.py --test")
         print("  python bmw_cardata_test.py --create-container")
         print("  python bmw_cardata_test.py --create-container --force")
+        print("  python bmw_cardata_test.py --delete-container <CONTAINER_ID>")
+        print("  python bmw_cardata_test.py --dump")
         sys.exit(0)
 
     if args.force and not args.create_container:
@@ -593,6 +720,10 @@ def main():
         run_test()
     elif args.create_container:
         run_create_container(force=args.force)
+    elif args.delete_container:
+        run_delete_container(args.delete_container)
+    elif args.dump:
+        run_dump()
 
 
 if __name__ == "__main__":
