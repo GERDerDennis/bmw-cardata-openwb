@@ -75,16 +75,34 @@ def save_tokens(t, container_id=None):
          "id_token": t.get("id_token"),
          "expires_at": time.time() + t.get("expires_in", 3600) - 60,
          "container_id": container_id or existing.get("container_id")}
-    with open(CONFIG["token_file"], "w") as f:
-        json.dump(d, f, indent=2)
-    os.chmod(CONFIG["token_file"], 0o600)
+    # Atomisch schreiben: erst Temp-Datei, dann umbenennen
+    tmp = CONFIG["token_file"] + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(d, f, indent=2)
+        os.replace(tmp, CONFIG["token_file"])
+        os.chmod(CONFIG["token_file"], 0o600)
+    except OSError as e:
+        log.error("Token-Datei konnte nicht gespeichert werden: %s", e)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 def load_tokens():
     p = CONFIG["token_file"]
     if not os.path.exists(p):
         return None
-    with open(p) as f:
-        return json.load(f)
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, ValueError):
+        log.warning("Token-Datei beschädigt – wird gelöscht. Bitte --auth erneut ausführen.")
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+        return None
 
 def get_token():
     t = load_tokens()
@@ -316,8 +334,11 @@ def main():
         except: pass
         if e.code == 403 and "CU-429" in body:
             log.warning("⚠ BMW API Tageslimit erreicht (50 Calls/Tag). Versuche es morgen wieder.")
-            sys.exit(0)
+            sys.exit(0)  # Sauber beenden – Token bleibt intakt!
         log.error("HTTP Fehler %s: %s", e.code, body[:300])
+        sys.exit(1)
+    except RuntimeError as e:
+        log.error("%s", e)
         sys.exit(1)
 
     if args.test:
