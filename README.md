@@ -26,12 +26,17 @@ Getestet mit BMW iX M60 + openWB Series 2 (SW 2.1.9). Kein Captcha, kein SSH-Zug
 
 ## Fahrzeugkompatibilität
 
-| Fahrzeug | SoC-Feld | Ergebnis |
-|----------|----------|----------|
-| BMW iX M60 (2023) | `charging.level` | ✅ funktioniert |
-| BMW iX3 G08 | `batteryManagement.header` | ⚠️ bitte testen |
-| BMW i3s | `batteryManagement.header` | ⚠️ bitte testen |
-| Weitere Modelle | – | Feedback willkommen! |
+## Fahrzeugkompatibilität
+| Fahrzeug | SoC-Feld | Kilometerstand | Ergebnis |
+|----------|----------|----------------|----------|
+| BMW iX M60 (2023, I20) | `charging.level` | ✅ | ✅ funktioniert |
+| BMW iX3 G08 | `batteryManagement.header` | ❓ | ✅ SoC + Reichweite |
+| BMW i3s | `batteryManagement.header` | ❓ | ✅ SoC + Reichweite |
+| BMW iX1 (BJ 11/23, OS9) | `batteryManagement.header` | ❓ | ✅ SoC bestätigt |
+| BMW i4 M50 xDrive (G26, BEV) | `charging.level` | ⚠️ fehlt in BimmerData-Containern | ✅ SoC + Reichweite |
+| Weitere Modelle | – | – | Feedback willkommen! |
+
+> **Hinweis:** Das native openWB-Modul legt automatisch einen eigenen Container mit allen benötigten Datenpunkten an – inklusive Kilometerstand. Nutzer die bisher nur BimmerData-Container haben erhalten den Kilometerstand nach der ersten Abfrage automatisch.
 
 Das Script prüft automatisch beide Felder – kein manueller Eingriff nötig.
 
