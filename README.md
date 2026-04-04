@@ -26,7 +26,6 @@ Getestet mit BMW iX M60 + openWB Series 2 (SW 2.1.9). Kein Captcha, kein SSH-Zug
 
 ## Fahrzeugkompatibilität
 
-## Fahrzeugkompatibilität
 | Fahrzeug | SoC-Feld | Kilometerstand | Ergebnis |
 |----------|----------|----------------|----------|
 | BMW iX M60 (2023, I20) | `charging.level` | ✅ | ✅ funktioniert |
