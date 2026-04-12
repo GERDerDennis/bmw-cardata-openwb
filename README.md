@@ -30,14 +30,20 @@ Getestet mit BMW iX M60 + openWB Series 2 (SW 2.1.9). Kein Captcha, kein SSH-Zug
 |----------|----------|----------------|----------|
 | BMW iX M60 (2023, I20) | `charging.level` | ✅ | ✅ funktioniert |
 | BMW iX3 G08 | `batteryManagement.header` | ❓ | ✅ SoC + Reichweite |
-| BMW i3s | `batteryManagement.header` | ❓ | ✅ SoC + Reichweite |
-| BMW iX1 (BJ 11/23, OS9) | `batteryManagement.header` | ❓ | ✅ SoC bestätigt |
-| BMW i4 M50 xDrive (G26, BEV) | `charging.level` | ⚠️ fehlt in BimmerData-Containern | ✅ SoC + Reichweite |
+| BMW i3s 120 (I01) | `batteryManagement.header` | ❓ | ✅ SoC + Reichweite |
+| BMW iX1 eDrive20 (U11, BJ 11/23) | `charging.level` | ❓ | ✅ SoC + Reichweite |
+| BMW i4 M50 xDrive (G26) | `charging.level` | ⚠️ fehlt in BimmerData-Containern | ✅ SoC + Reichweite |
+| BMW i5 eDrive40 (G61) | `charging.level` | ✅ | ✅ vollständig funktioniert |
+| MINI (BJ 2021) | `charging.level` | ✅ | ✅ SoC + Reichweite + Kilometerstand |
 | Weitere Modelle | – | – | Feedback willkommen! |
 
-> **Hinweis:** Das native openWB-Modul legt automatisch einen eigenen Container mit allen benötigten Datenpunkten an – inklusive Kilometerstand. Nutzer die bisher nur BimmerData-Container haben erhalten den Kilometerstand nach der ersten Abfrage automatisch.
+Das Modul prüft automatisch beide SoC-Felder in dieser Priorität:
+1. `vehicle.drivetrain.electricEngine.charging.level` (neuere Fahrzeuge)
+2. `vehicle.drivetrain.batteryManagement.header` (ältere Fahrzeuge, z.B. i3, iX3)
 
-Das Script prüft automatisch beide Felder – kein manueller Eingriff nötig.
+> **Hinweis Kilometerstand:** Das native openWB-Modul legt automatisch einen eigenen Container mit allen benötigten Datenpunkten an – inklusive `vehicle.vehicle.travelledDistance`. Nutzer die bisher nur BimmerData-Container haben erhalten den Kilometerstand nach der ersten Abfrage automatisch.
+
+> **Hinweis mehrere Fahrzeuge:** Der Container ist account-weit gültig. Beim nativen openWB-Modul nutzen alle Fahrzeuge automatisch denselben openWB-Container. Beim Bridge-Script empfiehlt es sich die Container-ID des ersten Fahrzeugs manuell in die Konfiguration des zweiten einzutragen um einen API-Call zu sparen.
 
 ---
 
